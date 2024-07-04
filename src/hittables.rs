@@ -7,11 +7,11 @@ pub trait Hittable {
 pub struct Sphere {
     center: Point3,
     radius: f32,
-    mat: &'static dyn Material,
+    mat: Material,
 }
 
 impl Sphere {
-    pub fn new(center: Point3, radius: f32, mat: &'static impl Material) -> Sphere {
+    pub fn new(center: Point3, radius: f32, mat: Material) -> Sphere {
         Sphere {
             center,
             radius,
@@ -69,7 +69,7 @@ impl HittableList {
         self.objects.push(Box::new(o));
     }
 
-    pub fn add_sphere(&mut self, center: Point3, radius: f32, mat: &'static impl Material) {
+    pub fn add_sphere(&mut self, center: Point3, radius: f32, mat: Material) {
         self.add_object(Sphere::new(center, radius, mat))
     }
 }

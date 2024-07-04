@@ -91,69 +91,69 @@ fn ray_color(ray: &Ray, hittable: &impl Hittable, depth: u32) -> Color {
     Color::one().lerp(Color::new(0.5, 0.7, 1.0), a)
 }
 
-pub trait Material {
-    fn scatter(&self, ray: &Ray, hit: &Hit) -> Option<(Color, Ray)>;
-}
-pub struct Lambertian {
-    albedo: Color,
+#[derive(Clone, Copy)]
+pub enum Material {
+    Lambertian { albedo: Color },
+    Metal { albedo: Color, fuzz: f32 },
+    Dielectric { refraction_index: f32 },
 }
 
-impl Lambertian {
-    const fn new(albedo: Color) -> Lambertian {
-        Lambertian { albedo }
+impl Material {
+    const fn lambertian(albedo: Color) -> Material {
+        Material::Lambertian { albedo }
     }
-}
+    const fn metal(albedo: Color, fuzz: f32) -> Material {
+        Material::Metal { albedo, fuzz }
+    }
+    const fn dielectric(refraction_index: f32) -> Material {
+        Material::Dielectric { refraction_index }
+    }
 
-impl Material for Lambertian {
-    fn scatter(&self, _ray: &Ray, hit: &Hit) -> Option<(Color, Ray)> {
+    fn scatter(&self, ray: &Ray, hit: &Hit) -> Option<(Color, Ray)> {
+        match self {
+            Self::Lambertian { albedo } => self.scatter_lambertian(ray, hit, *albedo),
+            Self::Metal { albedo, fuzz } => self.scatter_metal(ray, hit, *albedo, *fuzz),
+            Self::Dielectric { refraction_index } => {
+                self.scatter_dielectric(ray, hit, *refraction_index)
+            }
+        }
+    }
+
+    fn scatter_lambertian(&self, _ray: &Ray, hit: &Hit, albedo: Color) -> Option<(Color, Ray)> {
         let mut scatter_dir = hit.normal + random_unit_vector();
         if vec3_near_zero(scatter_dir) {
             scatter_dir = hit.normal
         }
-        Some((self.albedo, Ray::new(hit.p, scatter_dir)))
+        Some((albedo, Ray::new(hit.p, scatter_dir)))
     }
-}
 
-pub struct Metal {
-    albedo: Color,
-    fuzz: f32,
-}
-
-impl Metal {
-    const fn new(albedo: Color, fuzz: f32) -> Metal {
-        Metal { albedo, fuzz }
-    }
-}
-
-impl Material for Metal {
-    fn scatter(&self, ray: &Ray, hit: &Hit) -> Option<(raylib::prelude::Vector3, Ray)> {
+    fn scatter_metal(
+        &self,
+        ray: &Ray,
+        hit: &Hit,
+        albedo: Color,
+        fuzz: f32,
+    ) -> Option<(raylib::prelude::Vector3, Ray)> {
         let mut reflected = reflect(ray.dir, hit.normal);
-        reflected = reflected.normalized() + random_unit_vector() * self.fuzz;
+        reflected = reflected.normalized() + random_unit_vector() * fuzz;
 
         // If it scattered backwards, don't
         if hit.normal.dot(reflected) <= 0.0 {
             return None;
         }
-        Some((self.albedo, Ray::new(hit.p, reflected)))
+        Some((albedo, Ray::new(hit.p, reflected)))
     }
-}
 
-pub struct Dielectric {
-    refraction_index: f32,
-}
-
-impl Dielectric {
-    const fn new(refraction_index: f32) -> Dielectric {
-        Dielectric { refraction_index }
-    }
-}
-
-impl Material for Dielectric {
-    fn scatter(&self, ray: &Ray, hit: &Hit) -> Option<(Color, Ray)> {
+    fn scatter_dielectric(
+        &self,
+        ray: &Ray,
+        hit: &Hit,
+        refraction_index: f32,
+    ) -> Option<(Color, Ray)> {
         let ri = if hit.front_face {
-            1.0 / self.refraction_index
+            1.0 / refraction_index
         } else {
-            self.refraction_index
+            refraction_index
         };
 
         let unit_dir = ray.dir.normalized();
@@ -176,18 +176,12 @@ pub struct Hit {
     p: Point3,
     normal: Vector3,
     t: f32,
-    mat: &'static dyn Material,
+    mat: Material,
     front_face: bool,
 }
 
 impl Hit {
-    fn new(
-        p: Point3,
-        normal: Vector3,
-        t: f32,
-        mat: &'static dyn Material,
-        front_face: bool,
-    ) -> Hit {
+    fn new(p: Point3, normal: Vector3, t: f32, mat: Material, front_face: bool) -> Hit {
         Hit {
             p,
             normal,
@@ -201,6 +195,10 @@ impl Hit {
 fn vec3_near_zero(v: Vector3) -> bool {
     let thresh = 1e-8;
     v.x.abs() < thresh && v.y.abs() < thresh && v.z.abs() < thresh
+}
+
+fn random_f32(min: f32, max: f32) -> f32 {
+    fastrand::f32() * (max - min) + min
 }
 
 fn random_vec3() -> Vector3 {
@@ -257,16 +255,42 @@ fn reflectance(cosine: f32, refraction_index: f32) -> f32 {
     r0 + (1.0 - r0) * (1.0 - cosine).powi(5)
 }
 
-static GROUND: Lambertian = Lambertian::new(Color::new(0.5, 0.5, 0.5));
-static RED: Lambertian = Lambertian::new(Color::new(1.0, 0.0, 0.0));
-static GLASS: Dielectric = Dielectric::new(1.5);
+const GROUND: Material = Material::lambertian(Color::new(0.5, 0.5, 0.5));
+const GLASS: Material = Material::dielectric(1.5);
 
 fn make_world() -> HittableList {
     let mut world = HittableList::new();
 
-    world.add_sphere(Point3::new(0.0, -1000.0, 0.0), 1000.0, &GROUND);
-    world.add_sphere(Point3::up(), 1.0, &RED);
-    world.add_sphere(Point3::new(1.0, 1.0, -2.0), 1.0, &GLASS);
+    world.add_sphere(Point3::new(0.0, -1000.0, 0.0), 1000.0, GROUND);
+    for i in -11..11 {
+        for j in -11..11 {
+            let mat_choice = fastrand::f32();
+            let center = Point3::new(
+                i as f32 + 0.9 * fastrand::f32(),
+                0.2,
+                j as f32 + 0.9 * fastrand::f32(),
+            );
+
+            if (center - Point3::new(4.0, 0.2, 0.0)).length() > 0.9 {
+                if mat_choice < 0.8 {
+                    let mat = Material::lambertian(random_vec3() * random_vec3());
+                    world.add_sphere(center, 0.2, mat);
+                } else if mat_choice < 0.95 {
+                    let mat = Material::metal(random_vec3_range(0.5, 1.0), random_f32(0.0, 0.5));
+                    world.add_sphere(center, 0.2, mat);
+                } else {
+                    world.add_sphere(center, 0.2, GLASS);
+                }
+            }
+        }
+    }
+    world.add_sphere(Point3::up(), 1.0, GLASS);
+
+    let mat2 = Material::lambertian(Color::new(0.4, 0.2, 0.1));
+    world.add_sphere(Point3::new(-4.0, 1.0, 0.0), 1.0, mat2);
+
+    let mat3 = Material::metal(Color::new(0.7, 0.6, 0.5), 0.0);
+    world.add_sphere(Point3::new(4.0, 1.0, 0.0), 1.0, mat3);
 
     world
 }
