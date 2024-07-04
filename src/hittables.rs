@@ -1,31 +1,44 @@
 use crate::{Hit, Material, Point3, Ray};
 
-pub trait Hittable {
-    fn hit(&self, ray: &Ray, t_min: f32, t_max: f32) -> Option<Hit>;
+pub enum Hittable {
+    Sphere {
+        center: Point3,
+        radius: f32,
+        mat: Material,
+    },
 }
 
-pub struct Sphere {
-    center: Point3,
-    radius: f32,
-    mat: Material,
-}
-
-impl Sphere {
-    pub fn new(center: Point3, radius: f32, mat: Material) -> Sphere {
-        Sphere {
+impl Hittable {
+    pub fn sphere(center: Point3, radius: f32, mat: Material) -> Hittable {
+        Hittable::Sphere {
             center,
             radius,
             mat,
         }
     }
-}
 
-impl Hittable for Sphere {
-    fn hit(&self, ray: &Ray, t_min: f32, t_max: f32) -> Option<Hit> {
-        let ray_to_sphere = self.center - ray.origin;
+    pub fn hit(&self, ray: &Ray, t_min: f32, t_max: f32) -> Option<Hit> {
+        match self {
+            Hittable::Sphere {
+                center,
+                radius,
+                mat,
+            } => Hittable::hit_sphere(ray, t_min, t_max, center, radius, mat),
+        }
+    }
+
+    fn hit_sphere(
+        ray: &Ray,
+        t_min: f32,
+        t_max: f32,
+        center: &Point3,
+        radius: &f32,
+        mat: &Material,
+    ) -> Option<Hit> {
+        let ray_to_sphere = *center - ray.origin;
         let a = ray.dir.dot(ray.dir);
         let h = ray.dir.dot(ray_to_sphere);
-        let c = ray_to_sphere.dot(ray_to_sphere) - self.radius * self.radius;
+        let c = ray_to_sphere.dot(ray_to_sphere) - radius * radius;
 
         let discrim = h * h - a * c;
 
@@ -40,14 +53,14 @@ impl Hittable for Sphere {
         }
 
         let rp = ray.at(root);
-        let normal = (rp - self.center) / self.radius;
+        let normal = (rp - *center) / *radius;
         let front_face = ray.dir.dot(normal) < 0.0;
 
         let out = Hit::new(
             rp,
             if front_face { normal } else { -normal },
             root,
-            self.mat,
+            *mat,
             front_face,
         );
         Some(out)
@@ -55,7 +68,7 @@ impl Hittable for Sphere {
 }
 
 pub struct HittableList {
-    objects: Vec<Box<dyn Hittable>>,
+    objects: Vec<Hittable>,
 }
 
 impl HittableList {
@@ -65,17 +78,15 @@ impl HittableList {
         }
     }
 
-    pub fn add_object(&mut self, o: impl Hittable + 'static) {
-        self.objects.push(Box::new(o));
+    pub fn add_object(&mut self, o: Hittable) {
+        self.objects.push(o);
     }
 
     pub fn add_sphere(&mut self, center: Point3, radius: f32, mat: Material) {
-        self.add_object(Sphere::new(center, radius, mat))
+        self.add_object(Hittable::sphere(center, radius, mat))
     }
-}
 
-impl Hittable for HittableList {
-    fn hit(&self, ray: &Ray, t_min: f32, t_max: f32) -> Option<Hit> {
+    pub fn hit(&self, ray: &Ray, t_min: f32, t_max: f32) -> Option<Hit> {
         let mut hit = None;
         let mut t = t_max;
 

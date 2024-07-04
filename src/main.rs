@@ -8,8 +8,11 @@ use std::io;
 use std::io::prelude::*;
 use std::io::BufWriter;
 use std::ops::Range;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
+use std::thread;
 
-use hittables::Hittable;
 use hittables::HittableList;
 use material::Material;
 use raylib::math::Vector3;
@@ -21,9 +24,9 @@ use utils::random_vec3_range;
 const EPS: f32 = 1e-3;
 
 const FILENAME: &str = "image.ppm";
-const SCREEN_FACTOR: u32 = 400;
-const IMAGE_WIDTH: u32 = 3 * SCREEN_FACTOR;
-const IMAGE_HEIGHT: u32 = 2 * SCREEN_FACTOR;
+const SCREEN_FACTOR: usize = 400;
+const IMAGE_WIDTH: usize = 3 * SCREEN_FACTOR;
+const IMAGE_HEIGHT: usize = 2 * SCREEN_FACTOR;
 const COLOR_MAX: f32 = 256.0;
 
 const VFOV: f32 = 20.0;
@@ -35,12 +38,10 @@ const CAMERA_UP: Vector3 = Vector3::new(0.0, 1.0, 0.0);
 const DEFOCUS_ANGLE: f32 = 0.2;
 const FOCUS_DIST: f32 = 1.0;
 
-const SAMPLES_PER_PIXEL: u32 = 10;
-const MAX_SAMPLE_DEPTH: u32 = 3;
+const SAMPLES_PER_PIXEL: u32 = 500;
+const MAX_SAMPLE_DEPTH: u32 = 50;
 
-const PROGRESS_BAR_SEGMENTS: u32 = 20;
-
-const NUM_THREADS: usize = 1;
+const NUM_THREADS: usize = 10;
 
 type Color = Vector3;
 type Point3 = Vector3;
@@ -98,7 +99,7 @@ impl Ray {
     }
 }
 
-fn ray_color(ray: &Ray, hittable: &impl Hittable, depth: u32) -> Color {
+fn ray_color(ray: &Ray, hittable: &HittableList, depth: u32) -> Color {
     if depth == 0 {
         return Color::zero();
     }
@@ -207,62 +208,93 @@ fn main() -> io::Result<()> {
     let defocus_disk_v = v * defocus_radius;
 
     // Set up the scene
-    let world = make_world();
+    let world = Arc::new(make_world());
 
     // Perform raytracing
-    let mut pixels = Vec::new();
-    {
-        let mut progress_bar = "".to_string();
-        println!("Processing...");
+    println!("Processing...");
 
-        for j in 0..IMAGE_HEIGHT {
-            if (j + 1) % (IMAGE_HEIGHT / PROGRESS_BAR_SEGMENTS) == 0 {
-                progress_bar += "=";
-            }
-            print!(
-                "\r\x1b[K[{: <1$}]",
-                progress_bar, PROGRESS_BAR_SEGMENTS as usize
-            );
-            print!(" {}/{}", j + 1, IMAGE_HEIGHT);
-            io::stdout().flush().unwrap();
-            for i in 0..IMAGE_WIDTH {
-                let pixel_center = p0 + du * i as f32 + dv * j as f32;
+    let mut children = Vec::new();
+    let mut chunk_start = 0;
+    let rem = IMAGE_HEIGHT % NUM_THREADS;
+    let mut chunk_size = IMAGE_HEIGHT;
 
-                let mut c = Color::zero();
-                for _ in 0..SAMPLES_PER_PIXEL {
-                    let offset = Vector3::new(fastrand::f32() - 0.5, fastrand::f32() - 0.5, 0.0);
-                    let sample_center = pixel_center + offset * du + offset * dv;
+    let finished = Arc::new(AtomicUsize::new(0));
 
-                    // not normalized
-                    let dir = sample_center - camera_center;
-                    let r = Ray::new(
-                        if defocus_angle <= 0.0 {
-                            camera_center
-                        } else {
-                            defocus_disk_sample(camera_center, defocus_disk_u, defocus_disk_v)
-                        },
-                        dir,
-                    );
+    for i in 0..NUM_THREADS {
+        let world = Arc::clone(&world);
+        let finished = Arc::clone(&finished);
 
-                    c += ray_color(&r, &world, MAX_SAMPLE_DEPTH);
-                }
-
-                c /= SAMPLES_PER_PIXEL as f32;
-                c.clamp(Range {
-                    start: 0.0,
-                    end: COLOR_MAX,
-                });
-                pixels.push(c);
+        if NUM_THREADS > 1 {
+            chunk_size = IMAGE_HEIGHT / NUM_THREADS;
+            if i < rem {
+                chunk_size += 1;
             }
         }
 
-        // Write output image file
-        write_image_file(pixels)?;
+        children.push(thread::spawn(move || {
+            let mut pixels = Vec::new();
 
-        println!();
-        println!();
-        println!("Done!")
+            for j in chunk_start..(chunk_start + chunk_size) {
+                print!(
+                    "\r\x1b[K{}/{}",
+                    finished.load(Ordering::Relaxed) + 1,
+                    IMAGE_HEIGHT
+                );
+                io::stdout().flush().unwrap();
+                for i in 0..IMAGE_WIDTH {
+                    let pixel_center = p0 + du * i as f32 + dv * j as f32;
+
+                    let mut c = Color::zero();
+                    for _ in 0..SAMPLES_PER_PIXEL {
+                        let offset =
+                            Vector3::new(fastrand::f32() - 0.5, fastrand::f32() - 0.5, 0.0);
+                        let sample_center = pixel_center + offset * du + offset * dv;
+
+                        // not normalized
+                        let dir = sample_center - camera_center;
+                        let r = Ray::new(
+                            if defocus_angle <= 0.0 {
+                                camera_center
+                            } else {
+                                defocus_disk_sample(camera_center, defocus_disk_u, defocus_disk_v)
+                            },
+                            dir,
+                        );
+
+                        c += ray_color(&r, &world, MAX_SAMPLE_DEPTH);
+                    }
+
+                    c /= SAMPLES_PER_PIXEL as f32;
+                    c.clamp(Range {
+                        start: 0.0,
+                        end: COLOR_MAX,
+                    });
+                    pixels.push(c);
+                }
+                finished.fetch_add(1, Ordering::Relaxed);
+            }
+            pixels
+        }));
+        chunk_start += chunk_size;
     }
+
+    // Collect results from all threads
+    let pixels =
+        children
+            .into_iter()
+            .map(|c| c.join().unwrap())
+            .fold(Vec::new(), |mut acc, mut e| {
+                acc.append(&mut e);
+                acc
+            });
+    assert!(pixels.len() == IMAGE_HEIGHT * IMAGE_WIDTH);
+
+    // Write output image file
+    write_image_file(pixels)?;
+
+    println!();
+    println!();
+    println!("Done!");
 
     Ok(())
 }
