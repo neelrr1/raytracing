@@ -14,7 +14,7 @@ use raylib::math::Vector3;
 const EPS: f32 = 1e-3;
 
 const FILENAME: &str = "image.ppm";
-const SCREEN_FACTOR: u32 = 200;
+const SCREEN_FACTOR: u32 = 400;
 const IMAGE_WIDTH: u32 = 3 * SCREEN_FACTOR;
 const IMAGE_HEIGHT: u32 = 2 * SCREEN_FACTOR;
 const COLOR_MAX: f32 = 256.0;
@@ -25,10 +25,10 @@ const LOOK_FROM: Point3 = Point3::new(13.0, 2.0, 3.0);
 const LOOK_AT: Point3 = Point3::new(0.0, 0.0, 0.0);
 const CAMERA_UP: Vector3 = Vector3::new(0.0, 1.0, 0.0);
 
-const DEFOCUS_ANGLE: f32 = 0.0;
+const DEFOCUS_ANGLE: f32 = 0.2;
 const FOCUS_DIST: f32 = 1.0;
 
-const SAMPLES_PER_PIXEL: u32 = 10;
+const SAMPLES_PER_PIXEL: u32 = 500;
 const MAX_SAMPLE_DEPTH: u32 = 50;
 
 const PROGRESS_BAR_SEGMENTS: u32 = 20;
