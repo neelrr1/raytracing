@@ -1,5 +1,6 @@
 use crate::{
     utils::{random_unit_vector, reflect, reflectance, refract, vec3_near_zero},
+    vector3::Vector3,
     Color, Hit, Ray,
 };
 
@@ -45,12 +46,12 @@ impl Material {
         hit: &Hit,
         albedo: Color,
         fuzz: f32,
-    ) -> Option<(raylib::prelude::Vector3, Ray)> {
+    ) -> Option<(Vector3, Ray)> {
         let mut reflected = reflect(ray.dir, hit.normal);
         reflected = reflected.normalized() + random_unit_vector() * fuzz;
 
         // If it scattered backwards, don't
-        if hit.normal.dot(reflected) <= 0.0 {
+        if hit.normal.dot(&reflected) <= 0.0 {
             return None;
         }
         Some((albedo, Ray::new(hit.p, reflected)))
@@ -69,7 +70,7 @@ impl Material {
         };
 
         let unit_dir = ray.dir.normalized();
-        let cos_theta = -unit_dir.dot(hit.normal).min(1.0);
+        let cos_theta = -unit_dir.dot(&hit.normal).min(1.0);
         let sin_theta = (1.0 - cos_theta * cos_theta).sqrt();
 
         let cannot_refract = ri * sin_theta > 1.0;

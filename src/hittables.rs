@@ -36,9 +36,9 @@ impl Hittable {
         mat: &Material,
     ) -> Option<Hit> {
         let ray_to_sphere = *center - ray.origin;
-        let a = ray.dir.dot(ray.dir);
-        let h = ray.dir.dot(ray_to_sphere);
-        let c = ray_to_sphere.dot(ray_to_sphere) - radius * radius;
+        let a = ray.dir.dot(&ray.dir);
+        let h = ray.dir.dot(&ray_to_sphere);
+        let c = ray_to_sphere.dot(&ray_to_sphere) - radius * radius;
 
         let discrim = h * h - a * c;
 
@@ -47,14 +47,14 @@ impl Hittable {
         if root.is_nan() || root < t_min || root > t_max {
             // Check if the other root is in range
             root = (h + sqrtd) / a;
-            if root.is_nan() || root < t_min || root > t_max {
+            if root < t_min || root > t_max || root.is_nan() {
                 return None;
             }
         }
 
         let rp = ray.at(root);
         let normal = (rp - *center) / *radius;
-        let front_face = ray.dir.dot(normal) < 0.0;
+        let front_face = ray.dir.dot(&normal) < 0.0;
 
         let out = Hit::new(
             rp,

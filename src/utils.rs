@@ -1,6 +1,4 @@
-use raylib::math::Vector3;
-
-use crate::Point3;
+use crate::{vector3::Vector3, Point3};
 
 pub fn vec3_near_zero(v: Vector3) -> bool {
     let thresh = 1e-8;
@@ -22,7 +20,7 @@ pub fn random_vec3_range(min: f32, max: f32) -> Vector3 {
 pub fn random_vec3_in_sphere(radius: f32) -> Vector3 {
     loop {
         let candidate = random_vec3_range(-radius, radius);
-        if candidate.dot(candidate) < radius * radius {
+        if candidate.dot(&candidate) < radius * radius {
             return candidate;
         }
     }
@@ -37,7 +35,7 @@ pub fn random_vector_in_unit_disk() -> Vector3 {
         let mut candidate = random_vec3_range(-1.0, 1.0);
         candidate.z = 0.0;
 
-        if candidate.dot(candidate) < 1.0 {
+        if candidate.dot(&candidate) < 1.0 {
             return candidate;
         }
     }
@@ -53,13 +51,13 @@ pub fn defocus_disk_sample(
 }
 
 pub fn reflect(v: Vector3, n: Vector3) -> Vector3 {
-    v - n * v.dot(n) * 2.0
+    v - n * v.dot(&n) * 2.0
 }
 
 pub fn refract(uv: Vector3, n: Vector3, eta_i_over_eta_t: f32) -> Vector3 {
-    let cos_theta = -uv.dot(n).min(1.0);
+    let cos_theta = -uv.dot(&n).min(1.0);
     let r_out_perp = (uv + n * cos_theta) * eta_i_over_eta_t;
-    let r_out_parallel = n * -((1.0 - r_out_perp.dot(r_out_perp)).abs()).sqrt();
+    let r_out_parallel = n * -((1.0 - r_out_perp.dot(&r_out_perp)).abs()).sqrt();
     r_out_perp + r_out_parallel
 }
 

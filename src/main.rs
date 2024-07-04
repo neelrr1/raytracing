@@ -1,13 +1,13 @@
 mod hittables;
 mod material;
 mod utils;
+mod vector3;
 
 use std::f32::consts::PI;
 use std::fs::File;
 use std::io;
 use std::io::prelude::*;
 use std::io::BufWriter;
-use std::ops::Range;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -15,16 +15,16 @@ use std::thread;
 
 use hittables::HittableList;
 use material::Material;
-use raylib::math::Vector3;
 use utils::defocus_disk_sample;
 use utils::random_f32;
 use utils::random_vec3;
 use utils::random_vec3_range;
+use vector3::Vector3;
 
 const EPS: f32 = 1e-3;
 
 const FILENAME: &str = "image.ppm";
-const SCREEN_FACTOR: usize = 400;
+const SCREEN_FACTOR: usize = 1000;
 const IMAGE_WIDTH: usize = 3 * SCREEN_FACTOR;
 const IMAGE_HEIGHT: usize = 2 * SCREEN_FACTOR;
 const COLOR_MAX: f32 = 256.0;
@@ -38,8 +38,8 @@ const CAMERA_UP: Vector3 = Vector3::new(0.0, 1.0, 0.0);
 const DEFOCUS_ANGLE: f32 = 0.2;
 const FOCUS_DIST: f32 = 1.0;
 
-const SAMPLES_PER_PIXEL: u32 = 500;
-const MAX_SAMPLE_DEPTH: u32 = 50;
+const SAMPLES_PER_PIXEL: u32 = 32;
+const MAX_SAMPLE_DEPTH: u32 = 8;
 
 const NUM_THREADS: usize = 10;
 
@@ -115,7 +115,7 @@ fn ray_color(ray: &Ray, hittable: &HittableList, depth: u32) -> Color {
 
     // remap y from 0 to 1
     let a = (d.y + 1.0) * 0.5;
-    Color::one().lerp(Color::new(0.5, 0.7, 1.0), a)
+    Color::one().lerp(&Color::new(0.5, 0.7, 1.0), a)
 }
 
 pub struct Hit {
@@ -167,7 +167,7 @@ fn make_world() -> HittableList {
             }
         }
     }
-    world.add_sphere(Point3::up(), 1.0, GLASS);
+    world.add_sphere(Vector3::new(0.0, 1.0, 0.0), 1.0, GLASS);
 
     let mat2 = Material::lambertian(Color::new(0.4, 0.2, 0.1));
     world.add_sphere(Point3::new(-4.0, 1.0, 0.0), 1.0, mat2);
@@ -187,8 +187,8 @@ fn main() -> io::Result<()> {
 
     // Calculate unit vectors relative to camera
     let w = (LOOK_FROM - LOOK_AT).normalized();
-    let u = CAMERA_UP.cross(w).normalized();
-    let v = w.cross(u);
+    let u = CAMERA_UP.cross(&w).normalized();
+    let v = w.cross(&u);
 
     let viewport_u = u * viewport_width;
     let viewport_v = -v * viewport_height;
@@ -265,10 +265,7 @@ fn main() -> io::Result<()> {
                     }
 
                     c /= SAMPLES_PER_PIXEL as f32;
-                    c.clamp(Range {
-                        start: 0.0,
-                        end: COLOR_MAX,
-                    });
+                    c.clamp(0.0, COLOR_MAX);
                     pixels.push(c);
                 }
                 finished.fetch_add(1, Ordering::Relaxed);

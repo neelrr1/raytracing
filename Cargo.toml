@@ -5,4 +5,3 @@ edition = "2021"
 
 [dependencies]
 fastrand = "2.1.0"
-raylib = "5.0.1"
