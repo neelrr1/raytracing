@@ -1,4 +1,6 @@
 mod hittables;
+mod material;
+mod utils;
 
 use std::f32::consts::PI;
 use std::fs::File;
@@ -9,7 +11,12 @@ use std::ops::Range;
 
 use hittables::Hittable;
 use hittables::HittableList;
+use material::Material;
 use raylib::math::Vector3;
+use utils::defocus_disk_sample;
+use utils::random_f32;
+use utils::random_vec3;
+use utils::random_vec3_range;
 
 const EPS: f32 = 1e-3;
 
@@ -28,10 +35,12 @@ const CAMERA_UP: Vector3 = Vector3::new(0.0, 1.0, 0.0);
 const DEFOCUS_ANGLE: f32 = 0.2;
 const FOCUS_DIST: f32 = 1.0;
 
-const SAMPLES_PER_PIXEL: u32 = 500;
-const MAX_SAMPLE_DEPTH: u32 = 50;
+const SAMPLES_PER_PIXEL: u32 = 10;
+const MAX_SAMPLE_DEPTH: u32 = 3;
 
 const PROGRESS_BAR_SEGMENTS: u32 = 20;
+
+const NUM_THREADS: usize = 1;
 
 type Color = Vector3;
 type Point3 = Vector3;
@@ -54,6 +63,23 @@ fn write_color(mut w: impl Write, mut c: Color) -> io::Result<()> {
     c *= COLOR_MAX - EPS;
 
     writeln!(&mut w, "{} {} {}", c.x as u32, c.y as u32, c.z as u32)?;
+    Ok(())
+}
+
+fn write_image_file(pixels: Vec<Color>) -> io::Result<()> {
+    let f = File::create(FILENAME)?;
+    {
+        let mut w = BufWriter::new(f);
+
+        // Write file header
+        writeln!(&mut w, "P3")?;
+        writeln!(&mut w, "{} {}", IMAGE_WIDTH, IMAGE_HEIGHT)?;
+        writeln!(&mut w, "{}", COLOR_MAX as u32 - 1)?;
+
+        for pixel in pixels {
+            write_color(&mut w, pixel)?;
+        }
+    }
     Ok(())
 }
 
@@ -91,87 +117,6 @@ fn ray_color(ray: &Ray, hittable: &impl Hittable, depth: u32) -> Color {
     Color::one().lerp(Color::new(0.5, 0.7, 1.0), a)
 }
 
-#[derive(Clone, Copy)]
-pub enum Material {
-    Lambertian { albedo: Color },
-    Metal { albedo: Color, fuzz: f32 },
-    Dielectric { refraction_index: f32 },
-}
-
-impl Material {
-    const fn lambertian(albedo: Color) -> Material {
-        Material::Lambertian { albedo }
-    }
-    const fn metal(albedo: Color, fuzz: f32) -> Material {
-        Material::Metal { albedo, fuzz }
-    }
-    const fn dielectric(refraction_index: f32) -> Material {
-        Material::Dielectric { refraction_index }
-    }
-
-    fn scatter(&self, ray: &Ray, hit: &Hit) -> Option<(Color, Ray)> {
-        match self {
-            Self::Lambertian { albedo } => self.scatter_lambertian(ray, hit, *albedo),
-            Self::Metal { albedo, fuzz } => self.scatter_metal(ray, hit, *albedo, *fuzz),
-            Self::Dielectric { refraction_index } => {
-                self.scatter_dielectric(ray, hit, *refraction_index)
-            }
-        }
-    }
-
-    fn scatter_lambertian(&self, _ray: &Ray, hit: &Hit, albedo: Color) -> Option<(Color, Ray)> {
-        let mut scatter_dir = hit.normal + random_unit_vector();
-        if vec3_near_zero(scatter_dir) {
-            scatter_dir = hit.normal
-        }
-        Some((albedo, Ray::new(hit.p, scatter_dir)))
-    }
-
-    fn scatter_metal(
-        &self,
-        ray: &Ray,
-        hit: &Hit,
-        albedo: Color,
-        fuzz: f32,
-    ) -> Option<(raylib::prelude::Vector3, Ray)> {
-        let mut reflected = reflect(ray.dir, hit.normal);
-        reflected = reflected.normalized() + random_unit_vector() * fuzz;
-
-        // If it scattered backwards, don't
-        if hit.normal.dot(reflected) <= 0.0 {
-            return None;
-        }
-        Some((albedo, Ray::new(hit.p, reflected)))
-    }
-
-    fn scatter_dielectric(
-        &self,
-        ray: &Ray,
-        hit: &Hit,
-        refraction_index: f32,
-    ) -> Option<(Color, Ray)> {
-        let ri = if hit.front_face {
-            1.0 / refraction_index
-        } else {
-            refraction_index
-        };
-
-        let unit_dir = ray.dir.normalized();
-        let cos_theta = -unit_dir.dot(hit.normal).min(1.0);
-        let sin_theta = (1.0 - cos_theta * cos_theta).sqrt();
-
-        let cannot_refract = ri * sin_theta > 1.0;
-
-        let direction = if cannot_refract || reflectance(cos_theta, ri) > fastrand::f32() {
-            reflect(unit_dir, hit.normal)
-        } else {
-            refract(unit_dir, hit.normal, ri)
-        };
-
-        Some((Color::one(), Ray::new(hit.p, direction)))
-    }
-}
-
 pub struct Hit {
     p: Point3,
     normal: Vector3,
@@ -190,69 +135,6 @@ impl Hit {
             front_face,
         }
     }
-}
-
-fn vec3_near_zero(v: Vector3) -> bool {
-    let thresh = 1e-8;
-    v.x.abs() < thresh && v.y.abs() < thresh && v.z.abs() < thresh
-}
-
-fn random_f32(min: f32, max: f32) -> f32 {
-    fastrand::f32() * (max - min) + min
-}
-
-fn random_vec3() -> Vector3 {
-    Vector3::new(fastrand::f32(), fastrand::f32(), fastrand::f32())
-}
-
-fn random_vec3_range(min: f32, max: f32) -> Vector3 {
-    random_vec3() * (max - min) + min
-}
-
-fn random_vec3_in_sphere(radius: f32) -> Vector3 {
-    loop {
-        let candidate = random_vec3_range(-radius, radius);
-        if candidate.dot(candidate) < radius * radius {
-            return candidate;
-        }
-    }
-}
-
-fn random_unit_vector() -> Vector3 {
-    random_vec3_in_sphere(1.0).normalized()
-}
-
-fn random_vector_in_unit_disk() -> Vector3 {
-    loop {
-        let mut candidate = random_vec3_range(-1.0, 1.0);
-        candidate.z = 0.0;
-
-        if candidate.dot(candidate) < 1.0 {
-            return candidate;
-        }
-    }
-}
-
-fn defocus_disk_sample(center: Point3, defocus_disk_u: Vector3, defocus_disk_v: Vector3) -> Point3 {
-    let p = random_vector_in_unit_disk();
-    center + defocus_disk_u * p.x + defocus_disk_v * p.y
-}
-
-fn reflect(v: Vector3, n: Vector3) -> Vector3 {
-    v - n * v.dot(n) * 2.0
-}
-
-fn refract(uv: Vector3, n: Vector3, eta_i_over_eta_t: f32) -> Vector3 {
-    let cos_theta = -uv.dot(n).min(1.0);
-    let r_out_perp = (uv + n * cos_theta) * eta_i_over_eta_t;
-    let r_out_parallel = n * -((1.0 - r_out_perp.dot(r_out_perp)).abs()).sqrt();
-    r_out_perp + r_out_parallel
-}
-
-fn reflectance(cosine: f32, refraction_index: f32) -> f32 {
-    let mut r0 = (1.0 - refraction_index) / (1.0 + refraction_index);
-    r0 *= r0;
-    r0 + (1.0 - r0) * (1.0 - cosine).powi(5)
 }
 
 const GROUND: Material = Material::lambertian(Color::new(0.5, 0.5, 0.5));
@@ -327,18 +209,11 @@ fn main() -> io::Result<()> {
     // Set up the scene
     let world = make_world();
 
-    // Write output image file
-    let f = File::create(FILENAME)?;
+    // Perform raytracing
+    let mut pixels = Vec::new();
     {
-        let mut w = BufWriter::new(f);
-
-        // Write file header
-        writeln!(&mut w, "P3")?;
-        writeln!(&mut w, "{} {}", IMAGE_WIDTH, IMAGE_HEIGHT)?;
-        writeln!(&mut w, "{}", COLOR_MAX as u32 - 1)?;
-
         let mut progress_bar = "".to_string();
-        println!("Processing image...");
+        println!("Processing...");
 
         for j in 0..IMAGE_HEIGHT {
             if (j + 1) % (IMAGE_HEIGHT / PROGRESS_BAR_SEGMENTS) == 0 {
@@ -377,10 +252,16 @@ fn main() -> io::Result<()> {
                     start: 0.0,
                     end: COLOR_MAX,
                 });
-                write_color(&mut w, c)?;
+                pixels.push(c);
             }
         }
-        println!("\nDone!")
+
+        // Write output image file
+        write_image_file(pixels)?;
+
+        println!();
+        println!();
+        println!("Done!")
     }
 
     Ok(())
